@@ -1,0 +1,5 @@
+(executable
+ (public_name gstlaunch)
+ (name main)
+ (libraries gstlaunch gstreamer core)
+ (preprocess (pps ppx_jane)))
