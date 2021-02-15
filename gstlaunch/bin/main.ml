@@ -9,12 +9,17 @@ module MyPipeline = struct
   open Gstreamer
   open Opt
   let bin () = Gstreamer.Pipeline.parse_launch !command
+  let string_of_state_change = function
+    | Element.State_change_success -> "success"
+    | Element.State_change_async -> "async"
+    | Element.State_change_no_preroll -> "no preroll"
+  let print_get_state (sc, bef, aft) =
+   print_endline @@ Printf.sprintf "sc: %s, bef: %s, aft: %s" (string_of_state_change sc) (Element.string_of_state bef) (Element.string_of_state aft)
   let start_pipeline () =
     init ();
-    (Element.set_state (bin ()) Element.State_playing : Element.state_change) |> ignore;
-    (Element.get_state (bin ()) : Element.state_change * Element.state * Element.state) |> ignore;
-    Unix.sleep 2;
-    (Element.set_state (bin ()) Element.State_null : Element.state_change) |> ignore;
+    Element.set_state (bin ()) Element.State_playing |> string_of_state_change |> print_endline;
+    Element.get_state (bin ()) |> print_get_state;
+    Element.set_state (bin ()) Element.State_null |> string_of_state_change |> print_endline;
     deinit ();
     Gc.full_major
 end
