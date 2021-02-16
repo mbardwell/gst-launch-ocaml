@@ -1,11 +1,7 @@
 open Core
 
-module MyPipeline = struct
+module Gstreamer_ext = struct
   open Gstreamer
-  let verbose = ref false
-  let command = ref ""
-
-  let () = init ()
   let message_type_to_string : (Bus.message_payload -> string) = function
     | `Unknown -> "Unknown"
     | `End_of_stream -> "EOS"
@@ -79,20 +75,40 @@ module MyPipeline = struct
         | None -> print_endline "none"; ()
     in
     f ()
-  let start_pipeline () =
+  let get_state bin = Element.get_state (bin) |> print_get_state
+  let set_state bin state = Element.set_state (bin) state |> string_of_state_change |> print_endline
+end
 
+module MyPipeline = struct
+  open Gstreamer
+  open Gstreamer_ext
+  let verbose = ref false
+  let command = ref ""
+  let init () =
+    print_endline "Initialising pipeline";
+    init ()
+  let deinit () =
+    print_endline "Deinitialising pipeline";
+    deinit ();
+    Gc.full_major ()
+  let run () =
+    init ();
     let bin = Gstreamer.Pipeline.parse_launch !command in
     begin
       try begin
-        Element.get_state (bin) |> print_get_state;
-        Element.set_state (bin) Element.State_playing |> string_of_state_change |> print_endline;
-        Unix.sleep 2;
-        (* let timeout = Int64.of_int 1_000_000_000 in
-        let filter = [`End_of_stream; `Error] in
-        Bus.timed_pop_filtered (Bus.of_element (bin)) ~timeout filter |> print_bus_message; *)
-        flush (bin);
-        Element.set_state (bin) Element.State_null |> string_of_state_change |> print_endline;
-        flush (bin);
+        get_state bin;
+        set_state (bin) Element.State_ready;
+        get_state bin;
+        set_state (bin) Element.State_paused;
+        get_state bin;
+        set_state (bin) Element.State_playing;
+        get_state bin;
+        Unix.sleep 5;
+        set_state (bin) Element.State_paused;
+        get_state bin;
+        set_state (bin) Element.State_ready;
+        get_state bin;
+        set_state (bin) Element.State_null;
         end
       with
       | Error x -> print_endline x
@@ -101,9 +117,7 @@ module MyPipeline = struct
       | Failed -> print_endline "Failed"
       | End_of_stream -> print_endline "End of stream"
     end;
-    print_endline "Deinitialising pipeline";
-    deinit ();
-    Gc.full_major ()
+    deinit ()
 end
 
 let command =
@@ -117,7 +131,7 @@ let command =
       in fun () ->
         if verbose then MyPipeline.verbose := true;
         MyPipeline.command := command;
-        MyPipeline.start_pipeline ()
+        MyPipeline.run ()
     )
 
 let () =
