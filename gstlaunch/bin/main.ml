@@ -1,13 +1,10 @@
 open Core
 
-module Opt = struct
-  let verbose = ref false
-  let command = ref ""
-end
-
 module MyPipeline = struct
   open Gstreamer
-  open Opt
+  let verbose = ref false
+  let command = ref ""
+
   let () = init ()
   let message_type_to_string : (Bus.message_payload -> string) = function
     | `Unknown -> "Unknown"
@@ -42,7 +39,6 @@ module MyPipeline = struct
     | `Stream_start -> "Stream start"
     | `Need_context -> "Need context"
     | `Have_context -> "Have context"
-  let bin () = Gstreamer.Pipeline.parse_launch !command
   let string_of_state_change = function
     | Element.State_change_success -> "success"
     | Element.State_change_async -> "async"
@@ -51,34 +47,63 @@ module MyPipeline = struct
     print_endline @@ Printf.sprintf "sc: %s, bef: %s, aft: %s" (string_of_state_change sc) (Element.string_of_state bef) (Element.string_of_state aft)
   let print_bus_message (msg : Bus.message) =
     print_endline @@ "source: " ^ msg.source ^ " payload: " ^ (message_type_to_string msg.payload)
-  let start_pipeline () =
-    let timeToString nsd =
-      let msd = Int64.(to_int (nsd / (of_int 1_000_000)) |> function
-      | None -> raise Failed
-      | Some(x) -> x) in
-      let h = msd / 3_600_000 in
-      let m = (msd - (h * 3_600_000)) / 60_000 in
-      let s = (msd - (h * 3_600_000) - (m * 60_000)) / 1000 in
-      let h = if h = 0 then "" else Printf.sprintf "%d:" h in
-      Printf.sprintf "%s%d:%d" h m s in
-    let duration = Element.duration (bin ()) Format.Time |> timeToString in
-    Element.set_state (bin ()) Element.State_playing |> string_of_state_change |> print_endline;
-    Element.get_state (bin ()) |> print_get_state;
-    let rec wait () =
-      let position = Element.position (bin ()) Format.Time |> timeToString in
-      print_endline @@ "position: " ^ position;
-      print_endline @@ "duration: " ^ duration;
-      let timeout = (Int64.of_int 1_000_000_000) in
-      let filter = [`End_of_stream] in
-      match Bus.timed_pop_filtered (Bus.of_element (bin ())) ~timeout filter with
-      | exception Timeout -> wait ()
-      | exception Failed -> wait ()
-      | x -> print_bus_message x
+  let handler ~on_error msg =
+    let source = msg.Bus.source in
+    match msg.Bus.payload with
+      | `Error err ->
+          Printf.printf "[%s] Error: %s" source err;
+          on_error err
+      | `Warning err -> Printf.printf "[%s] Warning: %s" source err
+      | `Info err -> Printf.printf "[%s] Info: %s" source err
+      | `State_changed (o, n, p) ->
+          let f = Gstreamer.Element.string_of_state in
+          let o = f o in
+          let n = f n in
+          let p =
+            match p with
+              | Gstreamer.Element.State_void_pending -> ""
+              | _ -> Printf.sprintf " (pending: %s)" (f p)
+          in
+          Printf.printf "[%s] State change: %s -> %s%s" source o n p
+      | _ -> assert false
+  let flush
+    ?(types = [`Error; `Warning; `Info; `State_changed])
+    ?(on_error = print_endline)
+    bin =
+    let bus = Gstreamer.Bus.of_element bin in
+    let rec f () =
+      match Gstreamer.Bus.pop_filtered bus types with
+        | Some msg ->
+            handler ~on_error msg;
+            f ()
+        | None -> print_endline "none"; ()
     in
-    wait ();
-    Element.set_state (bin ()) Element.State_null |> string_of_state_change |> print_endline;
+    f ()
+  let start_pipeline () =
+
+    let bin = Gstreamer.Pipeline.parse_launch !command in
+    begin
+      try begin
+        Element.get_state (bin) |> print_get_state;
+        Element.set_state (bin) Element.State_playing |> string_of_state_change |> print_endline;
+        Unix.sleep 2;
+        (* let timeout = Int64.of_int 1_000_000_000 in
+        let filter = [`End_of_stream; `Error] in
+        Bus.timed_pop_filtered (Bus.of_element (bin)) ~timeout filter |> print_bus_message; *)
+        flush (bin);
+        Element.set_state (bin) Element.State_null |> string_of_state_change |> print_endline;
+        flush (bin);
+        end
+      with
+      | Error x -> print_endline x
+      | Stopped -> print_endline "Stopped"
+      | Timeout -> print_endline "Timeout"
+      | Failed -> print_endline "Failed"
+      | End_of_stream -> print_endline "End of stream"
+    end;
+    print_endline "Deinitialising pipeline";
     deinit ();
-    Gc.full_major
+    Gc.full_major ()
 end
 
 let command =
@@ -87,12 +112,12 @@ let command =
     ~readme:(fun () -> "Like gst-launch-1.0, but written in OCaml")
     Command.Let_syntax.(
       let%map_open
-        command = anon (("command" %: string))
-        and verbose = flag "-v" no_arg ~doc:"verbose output for debugging"
+        command = anon (("command" %: string)) and
+        verbose = flag "-v" no_arg ~doc:"verbose output for debugging"
       in fun () ->
-        if verbose then Opt.verbose := true;
-        Opt.command := command;
-        MyPipeline.start_pipeline () ()
+        if verbose then MyPipeline.verbose := true;
+        MyPipeline.command := command;
+        MyPipeline.start_pipeline ()
     )
 
 let () =
