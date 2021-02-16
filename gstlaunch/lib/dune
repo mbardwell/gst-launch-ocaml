@@ -1,2 +1,4 @@
 (library
- (name gstlaunch))
+ (name gstreamer_ext)
+ (libraries gstreamer core)
+ (preprocess (pps ppx_jane)))
